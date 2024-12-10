@@ -1,0 +1,38 @@
+#!/bin/sh
+
+if [ $# -ne 1 ]
+then
+  echo "Syntax Error"
+  echo "Usage $0 <svf id>  e.g. $0 superfin_2.3.1"
+else
+
+  cd /bin/
+  tftp -g -l jtag -r blackfin/urjtag/jtag repos
+  chmod u+x ./jtag
+  cd /usr/
+  mkdir -p local/share/urjtag/xilinx/xc3s400an/
+  cd local/share/urjtag/
+  rm *.svf *.md5
+  touch program
+  echo "cable gpio tdi=30 tdo=31 tck=29 tms=28" >> ./program
+  echo "detect" >> ./program
+  echo "svf $1.svf progress" >> ./program
+  tftp -g -l MANUFACTURERS -r blackfin/urjtag/data/MANUFACTURERS repos
+  tftp -g -l xilinx/PARTS -r blackfin/urjtag/data/xilinx/PARTS repos
+  tftp -g -l xilinx/xc3s400an/STEPPINGS -r blackfin/urjtag/data/xilinx/xc3s400an/STEPPINGS repos
+  tftp -g -l xilinx/xc3s400an/xc3s400an -r blackfin/urjtag/data/xilinx/xc3s400an/xc3s400an repos
+  tftp -g -l $1.svf -r blackfin/urjtag/svf/$1.svf repos
+  tftp -g -l $1.md5 -r blackfin/urjtag/svf/$1.md5 repos
+  md5sum -c $1.md5
+  if [ $? -ne 0 ]
+  then
+    echo "MD5 Bad; SVF file is corrupt."
+  else
+    jtag program
+  fi
+  
+  cd /
+  # Like we were never here...
+  rm -rf /usr/local/share/urjtag
+fi
+

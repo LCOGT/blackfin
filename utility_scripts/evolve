@@ -1,0 +1,215 @@
+#!/bin/sh
+# evolve -- shell script to upgrade blackfin from u-boot-2011.12 bootloader and
+#  2.6 linux kernel to u-boot-2013.07-2014R1 bootloader and 3.10 linux kernel
+#
+# Copyright (c) 2014 LCOGT, Inc.
+#
+
+if [ \( "$1" = "--help" \) -o \( $# -ne 2 \) ]; then
+	echo "usage: evolve <bootloader> <image_file>"
+	echo
+	echo "Example: evolve u-boot-1.0.0 uImage-1.0.0"
+	echo
+	exit 1
+fi
+
+# Verify we have the correct starting configuration
+
+kernel=`uname -r | awk -F"[ .]+" '{print $1"."$2}'`
+if [ "$kernel" != "2.6" ]; then
+	echo "Unsupported kernel version $kernel detected."
+	echo "This script only supports upgrading from 2.6 kernels."
+	exit 1
+fi
+uboot_ver=`grep -e "U-Boot [0-9]*[.]" -o /dev/mtd0`                                     
+if [ "$uboot_ver" != "U-Boot 2011." ]; then                                             
+	echo "U-Boot version mismatch: expected U-Boot 2011., found $uboot_ver"         
+	exit 1                                                                          
+fi                                                                                      
+mtd_size=`cat /proc/mtd | awk '/mtd0:/ {print $2}'`
+if [ "$mtd_size" != "00040000" ]; then
+	echo "mtd0 size mismatch: expected 00040000, found $mtd_size"
+	exit 1
+fi
+mtd_size=`cat /proc/mtd | awk '/mtd1:/ {print $2}'`
+if [ "$mtd_size" != "000c0000" ]; then
+	echo "mtd1 size mismatch: expected 000c0000, found $mtd_size"
+	exit 1
+fi
+mtd_size=`cat /proc/mtd | awk '/mtd2:/ {print $2}'`
+if [ "$mtd_size" != "00300000" ]; then
+	echo "mtd2 size mismatch: expected 00300000, found $mtd_size"
+	exit 1
+fi
+
+cd /tmp
+
+# Download utilities required for this upgrade
+
+echo "Downloading support utilities..."
+tftp -g -l upgrade-utils.md5 -r blackfin/upgrade-utils.md5 repos
+if [ $? -ne 0 ]; then
+	echo "Error downloading upgrade-utils.md5"
+	exit 1
+fi
+tftp -g -l upgrade-utils.tgz -r blackfin/upgrade-utils.tgz repos
+if [ $? -ne 0 ]; then
+	echo "Error downloading upgrade-utils.tgz"
+	exit 1
+fi
+echo "Download complete."
+md5sum -c upgrade-utils.md5
+if [ $? -ne 0 ]; then
+	echo "Bad checksum on upgrade-utils.tgz"
+	exit 1
+fi
+tar xzvf upgrade-utils.tgz -C /
+if [ $? -ne 0 ]; then
+	echo "Error deploying support utilities"
+	exit 1
+fi
+rm upgrade-utils.*
+
+# Download the target bootloader
+
+echo "Downloading bootloader $1..."
+tftp -g -l "$1.md5" -r "blackfin/$1.md5" repos
+if [ $? -ne 0 ]; then
+	echo "Error downloading $1.md5"
+	exit 1
+fi
+tftp -g -l "$1.bin" -r "blackfin/$1.bin" repos
+if [ $? -ne 0 ]; then
+	echo "Error downloading $1.bin"
+	exit 1
+fi
+echo "Download complete."
+md5sum -c "$1.md5"
+if [ $? -ne 0 ]; then
+	echo "Bad checksum on $1.bin"
+	exit 1
+fi
+grep -q update_linux "$1.bin"
+if [ $? -ne 0 ]; then
+	echo "$1 is not correct bootloader for this operation."
+	exit 1
+fi
+
+# Patch the bootloader with the proper MAC address
+
+ethaddr=`ifconfig eth0 | awk '/HWaddr/ {print $5}'`
+echo "Your ethernet address is $ethaddr"
+sleep 1
+echo "Patching bootloader..."
+patchboot "$1.bin" ethaddr "$ethaddr"
+echo "Patch complete."
+sleep 1
+
+# Download the target kernel image
+
+echo "Downloading image file $2..."
+tftp -g -l "$2.md5" -r "blackfin/$2.md5" repos
+if [ $? -ne 0 ]; then
+	echo "Error downloading $2.md5"
+	exit 1
+fi
+tftp -g -l "$2" -r "blackfin/$2" repos
+if [ $? -ne 0 ]; then
+	echo "Error downloading $2"
+	exit 1
+fi
+echo "Download complete."
+md5sum -c "$2.md5"
+if [ $? -ne 0 ]; then
+	echo "Bad checksum on $2"
+	exit 1
+fi
+grep -q bf537-0.3 "$2"
+if [ $? -ne 0 ]; then
+	echo "$2 is not the correct image file for this operation."
+	exit 1
+fi
+
+# Offer opportunuity to back out
+
+echo
+echo
+echo "*********************************************************************************"
+echo "    DANGER!  DANGER!  WARNING!  WARNING!  DANGER!  DANGER!  WARNING!  WARNING!"
+echo "*********************************************************************************"
+echo
+echo "You have reached the point of no return.  Proceed at your own risk.  If anything"
+echo "goes wrong from this point forward, you may have to travel half-way around the"
+echo "planet to fix it.  Good luck!"
+echo
+echo
+echo "Type 'GO' and press <Enter> to begin flashing or just press <Enter> to quit."
+echo
+read response
+
+if [ "$response" != "GO" ]; then
+	echo "Flashing aborted!"
+	exit 1
+fi
+
+# Execute the upgrade
+
+echo
+echo "Here goes nothing..."
+echo
+
+echo "Stopping services..."
+killall boa crond lcocron post
+sleep 2
+echo "Services stopped."
+
+echo "Unmounting flash filesystem..."
+umount /mnt/flash
+sleep 1
+echo "Flash filesystem unmounted."
+
+echo "Flashing bootloader..."
+unlock /dev/mtd0
+eraseall /dev/mtd0
+dd if="$1.bin" of=/dev/mtd0 bs=128k conv=sync
+lock /dev/mtd0 0 -1
+echo "Bootloader flashed."
+
+echo "Flashing image file..."
+unlock /dev/mtd1
+eraseall /dev/mtd1
+echo "Writing bytes 0x000000 - 0x0BFFFF"
+dd if="$2" of=/dev/mtd1 bs=128k count=6
+lock /dev/mtd1 0 -1
+
+unlock /dev/mtd2 0 8
+erase /dev/mtd2 0 8
+echo "Writing bytes 0x0C0000 - 0x1BFFFF"
+dd if="$2" of=/dev/mtd2 bs=128k skip=6 count=8 conv=sync
+lock /dev/mtd2 0 8
+
+echo 'O1' > /dev/gpio4
+sleep 1
+
+unlock /dev/mtd0
+eraseall /dev/mtd0
+echo "Writing bytes 0x1C0000 - 0x1FFFFF"
+dd if="$2" of=/dev/mtd0 bs=128k skip=14 count=2 conv=sync
+lock /dev/mtd0 0 -1
+
+echo "Image file flashed."
+sleep 1
+
+echo "Initializing flash filesystem..."
+unlock /dev/mtd1
+eraseall /dev/mtd1
+unlock /dev/mtd2 0 8
+erase /dev/mtd2 0 8
+echo "Flash filesystem initialized."
+
+echo 'O0' > /dev/gpio4
+sleep 1
+
+echo "Rebooting in five seconds..."
+sleep 5
+reboot
