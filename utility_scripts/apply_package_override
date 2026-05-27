@@ -1,0 +1,81 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	echo "usage: $0 <input.tgz> <output.tgz> [override-dir]" >&2
+	echo "example: $0 floyds-0.3.2.tgz floyds-0.3.4.tgz package-overrides/syslog" >&2
+	exit 1
+}
+
+[ $# -eq 2 ] || [ $# -eq 3 ] || usage
+
+input=$1
+output=$2
+override=${3:-package-overrides/syslog}
+
+[ -f "$input" ] || {
+	echo "input package not found: $input" >&2
+	exit 1
+}
+
+[ -d "$override" ] || {
+	echo "override directory not found: $override" >&2
+	exit 1
+}
+
+case "$input" in
+	*.tgz) ;;
+	*) echo "input must end in .tgz: $input" >&2; exit 1 ;;
+esac
+
+case "$output" in
+	*.tgz) ;;
+	*) echo "output must end in .tgz: $output" >&2; exit 1 ;;
+esac
+
+input_abs=$(cd "$(dirname "$input")" && pwd -P)/$(basename "$input")
+output_abs=$(cd "$(dirname "$output")" && pwd -P)/$(basename "$output")
+override_abs=$(cd "$override" && pwd -P)
+
+if [ "$input_abs" = "$output_abs" ]; then
+	echo "input and output must be different files" >&2
+	exit 1
+fi
+
+tmp=${TMPDIR:-/tmp}/blackfin-package-override.$$
+staging=$tmp/staging
+mkdir -p "$staging"
+
+cleanup() {
+	rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+echo "checking package paths"
+tar ztf "$input_abs" | while IFS= read -r path; do
+	case "$path" in
+		/*|../*|*/../*)
+			echo "refusing unsafe path in package: $path" >&2
+			exit 1
+			;;
+	esac
+done
+
+echo "extracting $input"
+tar zxf "$input_abs" -C "$staging"
+
+echo "applying override $override"
+(cd "$override_abs" && tar cf - .) | (cd "$staging" && tar xf -)
+
+if [ -f "$staging/bin/syslogd" ]; then
+	chmod 755 "$staging/bin/syslogd"
+fi
+
+echo "writing $output"
+(cd "$staging" && tar zcf "$output_abs" .)
+
+md5_file=${output_abs%.tgz}.md5
+echo "writing $md5_file"
+(cd "$(dirname "$output_abs")" && md5sum "$(basename "$output_abs")" > "$(basename "$md5_file")")
+
+echo "done"
