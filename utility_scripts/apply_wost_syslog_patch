@@ -1,0 +1,86 @@
+#!/bin/sh
+set -eu
+
+usage() {
+	echo "usage: $0 <input.tgz> <output.tgz>" >&2
+	echo "example: $0 wost-3.0.0.tgz wost-3.0.1.tgz" >&2
+	exit 1
+}
+
+[ $# -eq 2 ] || usage
+
+input=$1
+output=$2
+
+[ -f "$input" ] || {
+	echo "input package not found: $input" >&2
+	exit 1
+}
+
+case "$input" in
+	*.tgz) ;;
+	*) echo "input must end in .tgz: $input" >&2; exit 1 ;;
+esac
+
+case "$output" in
+	*.tgz) ;;
+	*) echo "output must end in .tgz: $output" >&2; exit 1 ;;
+esac
+
+input_abs=$(cd "$(dirname "$input")" && pwd -P)/$(basename "$input")
+output_abs=$(cd "$(dirname "$output")" && pwd -P)/$(basename "$output")
+
+if [ "$input_abs" = "$output_abs" ]; then
+	echo "input and output must be different files" >&2
+	exit 1
+fi
+
+tmp=${TMPDIR:-/tmp}/blackfin-wost-syslog.$$
+staging=$tmp/staging
+mkdir -p "$staging"
+
+cleanup() {
+	rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+echo "checking package paths"
+tar ztf "$input_abs" | while IFS= read -r path; do
+	case "$path" in
+		/*|../*|*/../*)
+			echo "refusing unsafe path in package: $path" >&2
+			exit 1
+			;;
+	esac
+done
+
+echo "extracting $input"
+tar zxf "$input_abs" -C "$staging"
+
+deploy=$staging/tmp/deploy
+[ -f "$deploy" ] || {
+	echo "WOST deploy script not found in package: tmp/deploy" >&2
+	exit 1
+}
+
+old='echo "null::respawn:/sbin/syslogd -n -s 1024 -b 3" >> /etc/inittab'
+new='echo "null::respawn:/sbin/syslogd -n -R syslog:514 -s 1024 -b 3" >> /etc/inittab'
+
+grep -Fq "$old" "$deploy" || {
+	echo "expected syslogd line not found in tmp/deploy" >&2
+	exit 1
+}
+
+echo "patching tmp/deploy"
+sed "s|$old|$new|" "$deploy" > "$deploy.new"
+mv "$deploy.new" "$deploy"
+chmod 755 "$deploy"
+
+echo "writing $output"
+(cd "$staging" && tar zcf "$output_abs" .)
+
+md5_file=${output_abs%.tgz}.md5
+echo "writing $md5_file"
+(cd "$(dirname "$output_abs")" && md5sum "$(basename "$output_abs")" > "$(basename "$md5_file")")
+
+echo "done"

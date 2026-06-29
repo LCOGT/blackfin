@@ -1,0 +1,3 @@
+#!/bin/sh
+pidof syslogd >/dev/null && exit 0
+exec /bin/syslogd

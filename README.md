@@ -1,17 +1,16 @@
 # Blackfin Project Notes
 
-This tree contains source, documentation, deployable artifacts, and field
-utility scripts for LCO Blackfin mechanism controllers, including Superfin
-boards.
+This tree contains deployable artifacts, packaging helpers, and field utility
+scripts for LCO Blackfin mechanism controllers, including Superfin boards.
 
 Important top-level directories:
 
-- `pxeboot`: TFTP-ready bootloaders, Linux images, application packages,
-  checksums, and upgrade/downgrade scripts.
-- `superfin`: Superfin FPGA/CPLD files and hardware/software documentation.
-- `u-boot`: U-Boot source trees for the old and new bootloader generations.
-- `uClinux`: uClinux source tree.
-- `ADIBuildroot`: Buildroot-based Linux 3.10 source tree.
+- repository root: TFTP-ready bootloaders, Linux images, application packages,
+  and checksums.
+- `utility_scripts`: upgrade, downgrade, and package-building helpers.
+- `package-overrides`: overlay files used to build patched application
+  packages.
+- `SPARES.md`: bench inventory for prepared spare controllers.
 
 ## Software Generations
 
@@ -22,8 +21,8 @@ seen in the field is Linux 3.10.10.
 ### Legacy uClinux 2.6
 
 Legacy systems run uClinux/Linux 2.6.24.7 with an application-specific OS image.
-The `pxeboot/uImage-*` files whose `file` output says
-`uClinux Kernel and ext2` are legacy 2.6 images. Examples include:
+The `uImage-*` files whose `file` output says `uClinux Kernel and ext2` are
+legacy 2.6 images. Examples include:
 
 - `uImage-floyds`
 - `uImage-floydscal`
@@ -52,7 +51,7 @@ mtd3: 01000000 "ROMfs"
 
 For this layout, `/mnt/flash` is `/dev/mtdblock1`.
 
-Legacy application packages in `pxeboot` include:
+Legacy application packages in this repository include:
 
 - `bosbox-*.tgz`
 - `floyds-*.tgz`
@@ -86,7 +85,7 @@ A safe syslog-only FLOyDS package can be built from known-good
 Newer systems run Buildroot/Linux 3.10.10. In this generation, the OS image is
 generic rather than application-specific.
 
-The 3.10 image in `pxeboot` is:
+The 3.10 image in this repository is:
 
 - `uImage-1.1.0`
 
@@ -102,7 +101,7 @@ mtd3: 001c0000 "flash file system(nor)"
 For this layout, `/mnt/flash` is `/dev/mtdblock3`.
 
 Buildroot-compatible application packages have a different layout from legacy
-packages. For example, `pxeboot/wost-3.0.0.tgz` installs under `/srv/www` and
+packages. For example, `wost-3.0.0.tgz` installs under `/srv/www` and
 includes a `tmp/deploy` script. Legacy packages usually install web files under
 `/home/httpd`.
 
@@ -110,6 +109,10 @@ Do not deploy legacy uClinux packages such as `floyds-0.3.2.tgz` onto a 3.10
 Buildroot system unless the package has been rebuilt and verified for
 Buildroot. Runtime symbol errors such as
 `post: can't resolve symbol '___thenan_sf'` indicate an ABI/toolchain mismatch.
+
+For spare-board preparation, WOST remains on Buildroot/Linux 3.10 using
+`wost-3.0.1.tgz`, which is built from `wost-3.0.0.tgz` by patching only
+`tmp/deploy` so `/sbin/syslogd` forwards to `syslog:514`.
 
 ## Safety Rules
 
@@ -180,11 +183,40 @@ mkdir -p /etc/config
 
 Then restart `post` so it reads the current config.
 
+## Spare Board Preparation
+
+The planned spare inventory is tracked in `SPARES.md`. Record each board's
+factory MAC address, installed application, kernel generation, OS image,
+application package, preparation date, verification result, and shipping
+destination before it leaves the bench.
+
+Build syslog-forwarding packages without overwriting the original artifacts:
+
+```sh
+utility_scripts/apply_package_override mirrorcell1m0-0.4.3.tgz mirrorcell1m0-0.4.7.tgz package-overrides/mirrorcell1m0-syslog
+utility_scripts/apply_package_override floyds-0.3.2.tgz floyds-0.3.4.tgz
+utility_scripts/apply_package_override floydscal-0.2.2.tgz floydscal-0.2.3.tgz
+utility_scripts/apply_wost_syslog_patch wost-3.0.0.tgz wost-3.0.1.tgz
+```
+
+The current spare targets are:
+
+- 7 `mirrorcell1m0` boards: legacy 2.6, `uImage-mirrorcell1m0`,
+  `mirrorcell1m0-0.4.7.tgz`
+- 7 `wost` boards: Buildroot/Linux 3.10, `uImage-1.1.0`, `wost-3.0.1.tgz`
+- 4 `floyds` boards: legacy 2.6, `uImage-floyds`, `floyds-0.3.4.tgz`
+- 4 `floydscal` boards: legacy 2.6, `uImage-floydscal`,
+  `floydscal-0.2.3.tgz`
+
+Keep each board's factory MAC address unless a site-specific replacement plan
+explicitly requires cloning an address. Label the board with application,
+kernel generation, package version, MAC address, and preparation date.
+
 ## Updating Applications Only
 
-`pxeboot/utility_scripts/update` downloads an application package and its
-checksum from TFTP and verifies the checksum. It does not deploy the package and
-does not flash the OS.
+`utility_scripts/update` downloads an application package and its checksum from
+TFTP and verifies the checksum. It does not deploy the package and does not
+flash the OS.
 
 Example:
 
@@ -196,7 +228,7 @@ sh /path/to/update floyds-0.3.2
 
 ## Evolve: 2.6 to 3.10
 
-`pxeboot/utility_scripts/evolve` upgrades a legacy 2.6 controller to the newer
+`utility_scripts/evolve` upgrades a legacy 2.6 controller to the newer
 Buildroot 3.10 generation.
 
 Command shape:
@@ -231,7 +263,7 @@ recovery path.
 
 ## Update Linux: 3.10 to Newer 3.10
 
-`pxeboot/utility_scripts/update_linux` updates the Linux image on systems
+`utility_scripts/update_linux` updates the Linux image on systems
 already running Buildroot 3.10.
 
 Command shape:
@@ -260,7 +292,7 @@ Do not use this on legacy 2.6 systems.
 
 ## Devolve: 3.10 to 2.6
 
-`pxeboot/utility_scripts/devolve` reverts a Buildroot 3.10 controller back to
+`utility_scripts/devolve` reverts a Buildroot 3.10 controller back to
 legacy uClinux 2.6.
 
 Command shape for FLOyDS:

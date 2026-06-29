@@ -1,0 +1,6 @@
+#PATH=/sbin:/bin
+#MAILTO=bburleson@lcogt.net
+#MAILHOST=mail
+
+0 * * * * /bin/ntpcheck
+0-59 * * * * /bin/start_syslogd
